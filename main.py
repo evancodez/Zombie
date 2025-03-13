@@ -115,7 +115,7 @@ WEAPONS = {
         'cooldown': 0.35 * FPS,  # 0.5 seconds between shots
         'damage': 10,
         'bullet_speed': 10,
-        'bullet_range': WIDTH // 3.5, 
+        'bullet_range': WIDTH // 3.4, 
         'spread': 0.25,  # Bullet spread in radians
         'bullet_count': 3,  # Three bullets
         'auto_fire': False,
@@ -131,13 +131,13 @@ WEAPONS = {
         'cooldown': 0.08 * FPS,  # 0.1 seconds between shots
         'damage': 5,
         'bullet_speed': 12,
-        'bullet_range': WIDTH // 2.2,  # 1/3 of screen width
+        'bullet_range': WIDTH // 2.2,  
         'spread': 0.08,  # Small spread
         'bullet_count': 1,
         'auto_fire': True,
         'color': SILVER,
         'can_overheat': True,  # Only machine gun can overheat
-        'heat_per_shot': 3,     # Half as much heat per shot (was 8)
+        'heat_per_shot': 3,     
         'max_heat': 100,
         'cool_rate': 0.35,      # Half the cooling rate (was 0.5)
         'penetration': 1  # Can hit one zombie
@@ -183,8 +183,8 @@ ZOMBIE_TYPES = {
         'attack_delay': 120,  # Slower attacks
         'spawn_weight': 5,    # Reduced spawn rate
         'can_shoot': True,
-        'shoot_range': WIDTH // 1.2,
-        'projectile_speed': 4,  # Very slow fireball (was 3)
+        'shoot_range': WIDTH // 1.4,
+        'projectile_speed': 5,  # Very slow fireball (was 3)
         'projectile_color': (255, 100, 0),  # Orange-red fireball
         'projectile_radius': 12,  # Larger projectile (was 8)
         'projectile_damage': 15,
@@ -208,11 +208,11 @@ ZOMBIE_TYPES = {
         'damage': 10,
         'radius': 14,
         'color': PURPLE,
-        'attack_delay': 160,  # Long delay between attacks
+        'attack_delay': 180,  # Long delay between attacks
         'spawn_weight': 12,
         'can_shoot': True,
-        'shoot_range': WIDTH // 2,  # Range at which it starts shooting
-        'projectile_speed': 11,
+        'shoot_range': WIDTH // 1.2,  # Range at which it starts shooting
+        'projectile_speed': 12,
         'projectile_color': NEON_CYAN,  # Bright neon cyan color
         'projectile_radius': 6,
         'projectile_damage': 15,
@@ -621,6 +621,9 @@ class Zombie:
             
         # Flag to track if zombie has fully entered the screen
         self.in_screen = False
+        
+        # Add shooting delay timer for big and sniper zombies
+        self.shooting_delay = 150 if zombie_type in ['big', 'sniper'] else 0  # 2.5 seconds at 60 FPS
 
     def move(self, player):
         # First check if zombie has fully entered the screen
@@ -669,6 +672,10 @@ class Zombie:
         if self.attack_cooldown > 0:
             self.attack_cooldown -= 1
             
+        # Update shooting delay timer if applicable
+        if self.shooting_delay > 0:
+            self.shooting_delay -= 1
+            
         # Check collision with player
         dx = player.x - self.x
         dy = player.y - self.y
@@ -679,7 +686,7 @@ class Zombie:
             self.attack_cooldown = self.attack_delay
         
         # Shooting logic for zombies that can shoot
-        if self.type_data.get('can_shoot', False):
+        if self.type_data.get('can_shoot', False) and self.shooting_delay <= 0:  # Only shoot after delay
             if self.shot_cooldown > 0:
                 self.shot_cooldown -= 1
             else:
@@ -713,7 +720,7 @@ class Zombie:
                     
                     # Reset cooldown
                     self.shot_cooldown = self.attack_delay
-            
+                    
         # Simple collision avoidance with other zombies
         for other in zombies:
             if other != self:
@@ -1746,42 +1753,49 @@ def game_over():
                 game_state = "menu"
 
 def draw_ui():
-    # Draw player health bar at the bottom of the screen
-    health_bar_length = 200
-    health_bar_height = 20
+    # Draw player health bar at the bottom of the screen - make it smaller and semi-transparent
+    health_bar_length = 150  # Reduced from 200
+    health_bar_height = 15   # Reduced from 20
     health_bar_x = 20
-    health_bar_y = HEIGHT - 30
+    health_bar_y = HEIGHT - 25  # Moved up slightly
     
-    pygame.draw.rect(screen, RED, (health_bar_x, health_bar_y, health_bar_length, health_bar_height))
+    # Create a semi-transparent surface for the health bar
+    health_bar_surface = pygame.Surface((health_bar_length, health_bar_height), pygame.SRCALPHA)
+    pygame.draw.rect(health_bar_surface, (255, 0, 0, 180), (0, 0, health_bar_length, health_bar_height))  # Semi-transparent red
     current_health_length = int(health_bar_length * (player.health / player.max_health))
-    pygame.draw.rect(screen, GREEN, (health_bar_x, health_bar_y, current_health_length, health_bar_height))
+    pygame.draw.rect(health_bar_surface, (0, 255, 0, 180), (0, 0, current_health_length, health_bar_height))  # Semi-transparent green
+    screen.blit(health_bar_surface, (health_bar_x, health_bar_y))
     
-    health_text = small_font.render(f"Health: {player.health}/{player.max_health}", True, BLACK)
-    screen.blit(health_text, (health_bar_x + 5, health_bar_y - 25))
+    # Use tiny_font instead of small_font for left-side UI
+    health_text = tiny_font.render(f"Health: {player.health}/{player.max_health}", True, BLACK)
+    screen.blit(health_text, (health_bar_x + 5, health_bar_y - 15))  # Moved up slightly
     
-    # Draw weapon inventory
-    inventory_x = 20
-    inventory_y = 20
+    # Draw weapon inventory with smaller text
+    inventory_x = 15  # Moved slightly left
+    inventory_y = 15  # Moved slightly up
     
-    weapon_text = small_font.render("Weapons:", True, BLACK)
+    weapon_text = tiny_font.render("Weapons:", True, BLACK)
     screen.blit(weapon_text, (inventory_x, inventory_y))
     
+    # Define a bright blue color for the selected weapon
+    SELECTED_WEAPON_COLOR = (0, 120, 255)  # Bright blue color
+    
     for i, weapon in enumerate(player.weapons):
-        color = YELLOW if i == player.current_weapon else BLACK
-        text = small_font.render(f"{i+1}: {WEAPONS[weapon]['name']}", True, color)
-        screen.blit(text, (inventory_x, inventory_y + 30 + i * 25))
+        color = SELECTED_WEAPON_COLOR if i == player.current_weapon else BLACK
+        text = tiny_font.render(f"{i+1}: {WEAPONS[weapon]['name']}", True, color)
+        screen.blit(text, (inventory_x, inventory_y + 20 + i * 18))  # Reduced spacing between items
     
     # Draw fireball ability status if unlocked
     if player.has_fireball_ability:
-        ability_y = inventory_y + 30 + len(player.weapons) * 25 + 10
+        ability_y = inventory_y + 20 + len(player.weapons) * 18 + 5  # Adjusted spacing
         if player.fireball_ready:
-            ability_text = small_font.render("F: FIREBALL READY", True, ORANGE)
+            ability_text = tiny_font.render("F: FIREBALL READY", True, ORANGE)
         else:
-            ability_text = small_font.render("Fireball: Next wave", True, GRAY)
+            ability_text = tiny_font.render("Fireball: Next wave", True, GRAY)
             
         screen.blit(ability_text, (inventory_x, ability_y))
     
-    # Draw wave information
+    # Draw essential game info (wave, score) in top right
     wave_text = small_font.render(f"Wave: {current_wave}", True, BLACK)
     screen.blit(wave_text, (WIDTH - wave_text.get_width() - 20, 20))
     
@@ -1790,34 +1804,9 @@ def draw_ui():
         boss_text = small_font.render("BOSS WAVE!", True, RED)
         screen.blit(boss_text, (WIDTH - boss_text.get_width() - 20, 20 + wave_text.get_height() + 5))
     
-    # Draw zombie count
-    zombie_text = small_font.render(f"Zombies: {len(zombies)}", True, BLACK)
-    screen.blit(zombie_text, (WIDTH - zombie_text.get_width() - 20, 50))
-    
     # Draw score
     score_text = small_font.render(f"Score: {score}", True, BLACK)
-    screen.blit(score_text, (WIDTH - score_text.get_width() - 20, 80))
-    
-    # Count zombie types for display
-    zombie_counts = {}
-    for zombie in zombies:
-        zombie_type = zombie.type
-        if zombie_type in zombie_counts:
-            zombie_counts[zombie_type] += 1
-        else:
-            zombie_counts[zombie_type] = 1
-    
-    # Display zombie type counts
-    y_offset = 110
-    for z_type, count in zombie_counts.items():
-        if z_type in ZOMBIE_TYPES:
-            type_text = small_font.render(f"{ZOMBIE_TYPES[z_type]['name']}: {count}", True, ZOMBIE_TYPES[z_type]['color'])
-            screen.blit(type_text, (WIDTH - type_text.get_width() - 20, y_offset))
-        else:
-            # Fallback for types not in ZOMBIE_TYPES
-            type_text = small_font.render(f"{z_type.capitalize()}: {count}", True, BLACK)
-            screen.blit(type_text, (WIDTH - type_text.get_width() - 20, y_offset))
-        y_offset += 25
+    screen.blit(score_text, (WIDTH - score_text.get_width() - 20, 50))
     
     # Draw wave timer if applicable
     if len(zombies) == 0 and wave_timer > 0:
