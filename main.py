@@ -12,6 +12,23 @@ import pygbag
 #pip install pygame
 
 
+#pygbag .
+## Clear the current docs folder
+#rm -rf docs/*
+
+## Copy the new build files to docs
+#cp -r build/web/* docs/
+
+# Add both your updated main.py and the rebuilt docs folder
+#git add main.py
+#git add docs
+
+# Commit the changes
+#git commit -m "Update game with new features and rebuild web version"
+
+# Push to GitHub
+#git push origin main
+
 def paused():
     global game_state, use_mouse_aim
     
@@ -142,9 +159,9 @@ WEAPONS = {
         'auto_fire': True,
         'color': SILVER,
         'can_overheat': True,  # Only machine gun can overheat
-        'heat_per_shot': 3.5,     
+        'heat_per_shot': 4,     
         'max_heat': 100,
-        'cool_rate': 0.4,   # Standard cooling rate
+        'cool_rate': 0.5,   # Standard cooling rate
         'overheat_cool_rate': 0.5,  
         'penetration': 1  # Can hit one zombie
     },
