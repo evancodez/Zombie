@@ -13,7 +13,7 @@ import pygbag
 
 
 def paused():
-    global game_state
+    global game_state, use_mouse_aim
     
     # Dim the screen
     dim_surface = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
@@ -24,10 +24,12 @@ def paused():
     pause_text = font.render("PAUSED", True, WHITE)
     resume_text = small_font.render("Press P to Resume", True, WHITE)
     restart_text = small_font.render("Press R to Restart", True, WHITE)
+    aim_toggle_text = small_font.render(f"Aiming: {'Mouse' if use_mouse_aim else 'Arrow Key Rotation'} (Press T to toggle)", True, WHITE)
     
     screen.blit(pause_text, (WIDTH // 2 - pause_text.get_width() // 2, HEIGHT // 3))
     screen.blit(resume_text, (WIDTH // 2 - resume_text.get_width() // 2, HEIGHT // 2))
     screen.blit(restart_text, (WIDTH // 2 - restart_text.get_width() // 2, HEIGHT // 2 + 40))
+    screen.blit(aim_toggle_text, (WIDTH // 2 - aim_toggle_text.get_width() // 2, HEIGHT // 2 + 80))
     
     pygame.display.flip()
     
@@ -41,6 +43,9 @@ def paused():
             elif event.key == pygame.K_r:  # Restart
                 game_state = "gameplay"
                 reset_game()
+            elif event.key == pygame.K_t:  # Toggle aiming mode
+                use_mouse_aim = not use_mouse_aim
+                print(f"Switched to {'Mouse' if use_mouse_aim else 'Arrow Key Rotation'} aiming")
 
 # Initialize Pygame
 pygame.init()
@@ -96,7 +101,7 @@ except:
 WEAPONS = {
     'pistol': {
         'name': 'Pistol',
-        'cooldown': 0.25 * FPS,  # 0.33 seconds between shots
+        'cooldown': 0.2 * FPS,  # 0.33 seconds between shots
         'damage': 10,
         'bullet_speed': 10,
         'bullet_range': float('inf'),  # Infinite range
@@ -112,11 +117,11 @@ WEAPONS = {
     },
     'shotgun': {
         'name': 'Shotgun',
-        'cooldown': 0.35 * FPS,  # 0.5 seconds between shots
-        'damage': 10,
+        'cooldown': 0.4 * FPS,  # 0.5 seconds between shots
+        'damage': 15,
         'bullet_speed': 10,
-        'bullet_range': WIDTH // 3.4, 
-        'spread': 0.25,  # Bullet spread in radians
+        'bullet_range': WIDTH // 3.3, 
+        'spread': 0.3,  # Bullet spread in radians
         'bullet_count': 3,  # Three bullets
         'auto_fire': False,
         'color': BROWN,
@@ -128,25 +133,26 @@ WEAPONS = {
     },
     'machine_gun': {
         'name': 'Machine Gun',
-        'cooldown': 0.08 * FPS,  # 0.1 seconds between shots
-        'damage': 5,
+        'cooldown': 0.08 * FPS,  
+        'damage': 7,
         'bullet_speed': 12,
         'bullet_range': WIDTH // 2.2,  
-        'spread': 0.08,  # Small spread
+        'spread': 0.10,  # Small spread
         'bullet_count': 1,
         'auto_fire': True,
         'color': SILVER,
         'can_overheat': True,  # Only machine gun can overheat
-        'heat_per_shot': 3,     
+        'heat_per_shot': 3.5,     
         'max_heat': 100,
-        'cool_rate': 0.35,      # Half the cooling rate (was 0.5)
+        'cool_rate': 0.4,   # Standard cooling rate
+        'overheat_cool_rate': 0.5,  
         'penetration': 1  # Can hit one zombie
     },
     'sniper': {
         'name': 'Sniper Rifle',
         'cooldown': 1.1 * FPS,  # 1 second between shots
         'damage': 50,  # Increased from 30 to 50
-        'bullet_speed': 8,  # Slower bullet speed
+        'bullet_speed': 12,  
         'bullet_range': float('inf'),  # Infinite range
         'spread': 0,  # No spread
         'bullet_count': 1,
@@ -192,7 +198,7 @@ ZOMBIE_TYPES = {
     },
     'fast': {
         'name': 'Fast Zombie',
-        'health': 20,  # 2 pistol shots to kill
+        'health': 15,  # 2 pistol shots to kill
         'speed_range': (2.5, 3.5),  # Very fast
         'damage': 5,
         'radius': 8,
@@ -330,12 +336,16 @@ class Player:
         self.angle = 0
         self.shoot_cooldown = 0
         
+        # Damage flash effect
+        self.damage_flash_timer = 0
+        self.flash_duration = 10  # Number of frames to show flash
+        
         # Weapon system
         self.weapons = ['pistol']  # Start with pistol
         self.current_weapon = 0
         self.shooting = False  # Track if player is holding shoot button
         
-        # Weapon heat system (only for machine gun)
+        # Weapon heat system (for machine gun)
         self.weapon_heat = 0
         self.weapon_overheated = False
         
@@ -351,14 +361,10 @@ class Player:
         if 0 <= index < len(self.weapons):
             self.current_weapon = index
             self.shoot_cooldown = 0  # Reset cooldown when switching weapons
-            self.weapon_heat = 0  # Reset heat when switching weapons
-            self.weapon_overheated = False
             
     def cycle_weapon(self, direction):
         self.current_weapon = (self.current_weapon + direction) % len(self.weapons)
         self.shoot_cooldown = 0  # Reset cooldown when switching weapons
-        self.weapon_heat = 0  # Reset heat when switching weapons
-        self.weapon_overheated = False
 
     def move(self, keys):
         if keys[pygame.K_w]:
@@ -378,22 +384,40 @@ class Player:
         if self.shoot_cooldown > 0:
             self.shoot_cooldown -= 1
             
-        # Cool down weapon if it's machine gun
-        weapon_type = self.get_current_weapon()
-        if weapon_type == 'machine_gun':
-            weapon = WEAPONS[weapon_type]
+        # Update damage flash timer
+        if self.damage_flash_timer > 0:
+            self.damage_flash_timer -= 1
             
-            if self.weapon_heat > 0:
-                self.weapon_heat -= weapon['cool_rate']
-                if self.weapon_heat <= 0:
-                    self.weapon_heat = 0
-                    self.weapon_overheated = False
+        # Cool down machine gun heat regardless of current weapon
+        if self.weapon_heat > 0:
+            # Get machine gun properties
+            weapon = WEAPONS['machine_gun']
+            
+            # Use different cooling rate based on whether the weapon is overheated
+            cooling_rate = weapon['overheat_cool_rate'] if self.weapon_overheated else weapon['cool_rate']
+            
+            # Apply cooling
+            self.weapon_heat -= cooling_rate
+            
+            # Check if heat is now below threshold
+            if self.weapon_heat <= 0:
+                self.weapon_heat = 0
+                self.weapon_overheated = False
 
-    def aim(self, mouse_pos):
-        mouse_x, mouse_y = mouse_pos
-        dx = mouse_x - self.x
-        dy = mouse_y - self.y
-        self.angle = math.atan2(dy, dx)
+    def aim(self, mouse_pos=None, keyboard_dir=None):
+        # If using mouse aim and mouse position is provided
+        if mouse_pos:
+            mouse_x, mouse_y = mouse_pos
+            dx = mouse_x - self.x
+            dy = mouse_y - self.y
+            self.angle = math.atan2(dy, dx)
+        # If using keyboard aim and keyboard direction is provided
+        elif keyboard_dir:
+            dx, dy = keyboard_dir
+            # Only update angle if direction is meaningful
+            if dx != 0 or dy != 0:
+                # Calculate angle from direction vector
+                self.angle = math.atan2(dy, dx)
 
     def shoot(self, bullets):
         # Ensure we have weapons available
@@ -457,6 +481,15 @@ class Player:
 
     def take_damage(self, damage):
         self.health -= damage
+        self.damage_flash_timer = self.flash_duration  # Start flash effect
+        
+        # Create blue blood particles
+        for _ in range(8):  # Create 8 particles
+            angle = random.uniform(0, 2 * math.pi)
+            speed = random.uniform(2, 4)
+            size = random.randint(2, 4)
+            particles.append(Particle(self.x, self.y, angle, speed, BLUE, size, True))
+            
         if sounds_loaded:
             player_hit_sound.play()
         return self.health <= 0
@@ -515,8 +548,9 @@ class Player:
         return True
 
     def draw(self, screen):
-        # Draw player body
-        pygame.draw.circle(screen, self.color, (int(self.x), int(self.y)), self.radius)
+        # Draw player body with flash effect if damaged
+        player_color = RED if self.damage_flash_timer > 0 else self.color
+        pygame.draw.circle(screen, player_color, (int(self.x), int(self.y)), self.radius)
         
         # Draw player direction line
         line_length = self.radius * 1.5
@@ -524,10 +558,9 @@ class Player:
         end_y = self.y + math.sin(self.angle) * line_length
         pygame.draw.line(screen, BLACK, (int(self.x), int(self.y)), (int(end_x), int(end_y)), 2)
         
-        # Draw weapon heat bar if using machine gun
-        weapon_type = self.get_current_weapon()
-        if weapon_type == 'machine_gun':
-            weapon = WEAPONS[weapon_type]
+        # Draw weapon heat bar if using machine gun or it has heat
+        if self.get_current_weapon() == 'machine_gun' or self.weapon_heat > 0 or self.weapon_overheated:
+            weapon = WEAPONS['machine_gun']
             
             heat_bar_length = 50
             heat_bar_height = 4
@@ -561,8 +594,11 @@ class Player:
                 flash_color = RED if pygame.time.get_ticks() % 1000 < 500 else YELLOW
                 overheat_text = tiny_font.render("OVERHEATED!", True, flash_color)
                 screen.blit(overheat_text, (self.x - overheat_text.get_width() // 2, heat_bar_y + heat_bar_height + 20))
-                prompt_text = tiny_font.render("Switch weapons", True, BLACK)
-                screen.blit(prompt_text, (self.x - prompt_text.get_width() // 2, heat_bar_y + heat_bar_height + 35))
+                
+                # Only show "Switch weapons" prompt if currently using the machine gun
+                if self.get_current_weapon() == 'machine_gun':
+                    prompt_text = tiny_font.render("Switch weapons", True, BLACK)
+                    screen.blit(prompt_text, (self.x - prompt_text.get_width() // 2, heat_bar_y + heat_bar_height + 35))
         
         # Draw fireball ability indicator if unlocked
         if self.has_fireball_ability:
@@ -574,11 +610,8 @@ class Player:
                 # Draw text indicator above the player
                 ability_text = tiny_font.render("F: FIREBALL READY", True, ORANGE)
                 screen.blit(ability_text, (self.x - ability_text.get_width() // 2, self.y - self.radius - 25))
-            else:
-                # Display cooldown message
-                cooldown_text = tiny_font.render("Fireball: Next wave", True, GRAY)
-                screen.blit(cooldown_text, (self.x - cooldown_text.get_width() // 2, self.y - self.radius - 25))
-        
+            
+                
         # Draw health bar
         health_bar_length = 50
         health_bar_height = 5
@@ -628,9 +661,21 @@ class Zombie:
     def move(self, player):
         # First check if zombie has fully entered the screen
         if not self.in_screen:
+            # Calculate direction to center of screen
+            center_x, center_y = WIDTH // 2, HEIGHT // 2
+            dx = center_x - self.x
+            dy = center_y - self.y
+            distance = max(math.sqrt(dx*dx + dy*dy), 0.1)
+            
+            # Move towards center until fully on screen
+            self.x += (dx / distance) * self.speed
+            self.y += (dy / distance) * self.speed
+            
+            # Check if now fully on screen
             if (self.radius < self.x < WIDTH - self.radius and 
                 self.radius < self.y < HEIGHT - self.radius):
                 self.in_screen = True
+            return  # Don't do normal movement until fully on screen
     
         # Sniper zombies try to maintain distance
         if self.type == 'sniper':
@@ -1257,6 +1302,11 @@ score = 0
 boss_announcement = False  # Flag to show boss announcement
 boss_announcement_timer = 0  # Timer for how long to show the announcement
 
+# Aiming settings
+use_mouse_aim = True  # True for mouse aim, False for arrow key aim
+arrow_key_sensitivity = 0.03  # How quickly aim direction rotates with arrow keys (in radians per frame)
+show_sensitivity_slider = False  # Whether to show the sensitivity slider in the menu
+
 # Game objects
 player = Player(WIDTH // 2, HEIGHT // 2)
 zombies = []
@@ -1410,7 +1460,7 @@ def spawn_weapon_pickup():
 
 # Game loop
 def menu():
-    global game_state
+    global game_state, use_mouse_aim, arrow_key_sensitivity, show_sensitivity_slider
     
     screen.fill(WHITE)
     
@@ -1418,8 +1468,11 @@ def menu():
     instruction = small_font.render("Press SPACE to Start", True, BLACK)
     # Controls explanation in menu
     controls = small_font.render("Controls: WASD to move, Mouse/Space to shoot", True, BLACK)
-    controls2 = small_font.render("Number keys (1-4) or E to switch weapons, P to pause", True, BLACK)
+    controls2 = small_font.render("Number keys (1-4) or E/Q to switch weapons, P to pause", True, BLACK)
     controls3 = small_font.render("Press F to use Fireball Spiral (unlocks after wave 10)", True, ORANGE)
+    
+    # Add aiming toggle option
+    aim_mode_text = small_font.render(f"Aiming Mode: {'Mouse' if use_mouse_aim else 'Arrow Key Rotation'} (Press T to toggle)", True, BLUE)
     
     # Add boss wave info
     boss_info = small_font.render("Defeat the boss at Wave 10 to unlock the Fireball Spiral!", True, GOLD)
@@ -1429,7 +1482,33 @@ def menu():
     screen.blit(controls, (WIDTH // 2 - controls.get_width() // 2, HEIGHT // 2 + 40))
     screen.blit(controls2, (WIDTH // 2 - controls2.get_width() // 2, HEIGHT // 2 + 70))
     screen.blit(controls3, (WIDTH // 2 - controls3.get_width() // 2, HEIGHT // 2 + 100))
-    screen.blit(boss_info, (WIDTH // 2 - boss_info.get_width() // 2, HEIGHT // 2 + 130))
+    screen.blit(aim_mode_text, (WIDTH // 2 - aim_mode_text.get_width() // 2, HEIGHT // 2 + 130))
+    screen.blit(boss_info, (WIDTH // 2 - boss_info.get_width() // 2, HEIGHT // 2 + 160))
+    
+    # Draw sensitivity slider if arrow key aiming is selected
+    if not use_mouse_aim or show_sensitivity_slider:
+        show_sensitivity_slider = True
+        slider_text = small_font.render("Arrow Key Rotation Speed:", True, BLUE)
+        screen.blit(slider_text, (WIDTH // 2 - slider_text.get_width() // 2, HEIGHT // 2 + 190))
+        
+        # Draw slider background
+        slider_width = 200
+        slider_height = 10
+        slider_x = WIDTH // 2 - slider_width // 2
+        slider_y = HEIGHT // 2 + 220
+        pygame.draw.rect(screen, GRAY, (slider_x, slider_y, slider_width, slider_height))
+        
+        # Draw slider handle
+        handle_pos = int(slider_x + (arrow_key_sensitivity / 0.1) * slider_width)
+        pygame.draw.circle(screen, BLUE, (handle_pos, slider_y + slider_height // 2), 8)
+        
+        # Draw sensitivity value
+        value_text = small_font.render(f"{arrow_key_sensitivity:.2f}", True, BLUE)
+        screen.blit(value_text, (WIDTH // 2 - value_text.get_width() // 2, slider_y + slider_height + 10))
+        
+        # Instruction for adjusting sensitivity
+        adjust_text = small_font.render("Use Left/Right arrows to adjust rotation speed", True, BLACK)
+        screen.blit(adjust_text, (WIDTH // 2 - adjust_text.get_width() // 2, slider_y + slider_height + 40))
     
     pygame.display.flip()
     
@@ -1441,9 +1520,33 @@ def menu():
             if event.key == pygame.K_SPACE:
                 game_state = "gameplay"
                 reset_game()
+            elif event.key == pygame.K_t:
+                # Toggle aiming mode
+                use_mouse_aim = not use_mouse_aim
+                if use_mouse_aim:
+                    show_sensitivity_slider = False
+            elif show_sensitivity_slider and event.key == pygame.K_LEFT:
+                # Decrease sensitivity
+                arrow_key_sensitivity = max(0.005, arrow_key_sensitivity - 0.005)
+            elif show_sensitivity_slider and event.key == pygame.K_RIGHT:
+                # Increase sensitivity
+                arrow_key_sensitivity = min(0.1, arrow_key_sensitivity + 0.005)
+        
+        # Allow clicking on the slider to set sensitivity
+        elif show_sensitivity_slider and event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            mouse_x, mouse_y = pygame.mouse.get_pos()
+            slider_width = 200
+            slider_x = WIDTH // 2 - slider_width // 2
+            slider_y = HEIGHT // 2 + 220
+            
+            # Check if click is within slider area
+            if slider_x <= mouse_x <= slider_x + slider_width and slider_y - 10 <= mouse_y <= slider_y + 20:
+                # Calculate sensitivity based on click position
+                ratio = (mouse_x - slider_x) / slider_width
+                arrow_key_sensitivity = max(0.005, min(0.1, ratio * 0.1))
 
 def gameplay():
-    global game_state, current_wave, wave_timer, score, zombies, blood_stains, weapon_pickups, boss_announcement, boss_announcement_timer
+    global game_state, current_wave, wave_timer, score, zombies, blood_stains, weapon_pickups, boss_announcement, boss_announcement_timer, use_mouse_aim, arrow_key_sensitivity
     
     # Process events
     for event in pygame.event.get():
@@ -1469,9 +1572,11 @@ def gameplay():
                 weapon_index = event.key - pygame.K_1  # Convert to 0-based index
                 if weapon_index < len(player.weapons):
                     player.switch_weapon(weapon_index)
-            # Cycle weapons with E
+            # Cycle weapons with E (forward) and Q (backward)
             elif event.key == pygame.K_e:
                 player.cycle_weapon(1)  # Cycle forward
+            elif event.key == pygame.K_q:
+                player.cycle_weapon(-1)  # Cycle backward
             # Shooting with space
             elif event.key == pygame.K_SPACE:
                 player.shooting = True
@@ -1482,12 +1587,15 @@ def gameplay():
             # Use fireball ability with F
             elif event.key == pygame.K_f:
                 player.fire_fireball_spiral(bullets)
+            # Toggle aiming mode with T key has been removed - only available in menu/pause
         elif event.type == pygame.KEYUP:
             if event.key == pygame.K_SPACE:
                 player.shooting = False
     
     # Get keyboard input
     keys = pygame.key.get_pressed()
+    
+    # If using arrow keys for aiming, WASD is still used for movement
     player.move(keys)
     
     # Continue auto-firing if shooting button is held and weapon is machine gun
@@ -1496,9 +1604,25 @@ def gameplay():
         if not (weapon_type == 'machine_gun' and player.weapon_overheated):
             player.shoot(bullets)
     
-    # Get mouse position
-    mouse_pos = pygame.mouse.get_pos()
-    player.aim(mouse_pos)
+    # Handle aiming based on selected mode
+    if use_mouse_aim:
+        # Get mouse position for aiming
+        mouse_pos = pygame.mouse.get_pos()
+        player.aim(mouse_pos=mouse_pos)
+    else:
+        # Use arrow keys for rotation-based aiming
+        # Left/Right rotate the aim direction
+        if keys[pygame.K_LEFT]:
+            player.angle -= arrow_key_sensitivity * 3  # Rotate counterclockwise
+        if keys[pygame.K_RIGHT]:
+            player.angle += arrow_key_sensitivity * 3  # Rotate clockwise
+            
+        # Optionally, Up/Down can also adjust aim for finer control
+        if keys[pygame.K_UP]:
+            # Make smaller adjustments with up/down for precision
+            player.angle += arrow_key_sensitivity * 3  
+        if keys[pygame.K_DOWN]:
+            player.angle -= arrow_key_sensitivity * 3
     
     # Update game objects
     player.update()
@@ -1753,6 +1877,8 @@ def game_over():
                 game_state = "menu"
 
 def draw_ui():
+    global use_mouse_aim
+    
     # Draw player health bar at the bottom of the screen - make it smaller and semi-transparent
     health_bar_length = 150  # Reduced from 200
     health_bar_height = 15   # Reduced from 20
@@ -1794,6 +1920,10 @@ def draw_ui():
             ability_text = tiny_font.render("Fireball: Next wave", True, GRAY)
             
         screen.blit(ability_text, (inventory_x, ability_y))
+        
+    # Draw aiming mode indicator
+    aim_y = inventory_y + 20 + len(player.weapons) * 18 + (30 if player.has_fireball_ability else 5)
+    aim_text = tiny_font.render(f"Aim: {'Mouse' if use_mouse_aim else 'Arrow Key Rotation'}", True, BLUE)
     
     # Draw essential game info (wave, score) in top right
     wave_text = small_font.render(f"Wave: {current_wave}", True, BLACK)
